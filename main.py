@@ -1,12 +1,13 @@
 from tinkoff.invest import Client
-from tinkoff.invest import Quotation, MoneyValue
-from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType
+from tinkoff.invest import Quotation
+from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType, SecurityTradingStatus
 from tinkoff.invest import PortfolioPosition
 from tinkoff.invest import ReplaceOrderRequest
 from tinkoff.invest.sandbox.client import SandboxClient
 
-import os
 import json
+import traceback
+from time import sleep
 from types import NoneType
 
 from pprint import pprint
@@ -14,6 +15,7 @@ from pprint import pprint
 from interface import *
 from utils import *
 
+import telebot
 
 class Client(object):
     def __init__(self, token):
@@ -63,7 +65,7 @@ class TMOS_Stratagy(Stratagy):
     def buy_condition(self, client : Client, data : DataStorageResponse):
         # get data
         orders = data.orders
-        position = position.positions
+        position = data.positions
         order_book = data.order_book
 
         instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
@@ -220,18 +222,43 @@ class DataManager():
         if or_b in self.order_book.keys():
             del self.order_book[or_b] 
 
-# with open('./config.json', 'r') as f:
-#     data  = json.load(f)
+class Bot():
+    def __init__(self):
+        token = self._load_token()
+        self.Client = Client(token)
+        self.Stratagy = TMOS_Stratagy()
+        self.DataManager = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
 
-# os.environ['token'] = data['token']
-# client = Client(os.environ['token'])
+    def run(self):
+        bot = telebot.TeleBot(token=self._load_telegram_token())
+        while True:
+            sleep(2)
+            if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
+                continue
+            try:
+                self._iter()
+            except Exception as e:
+                msg = traceback.format_exc()
+                print(msg)
+                bot.send_message(self._load_telegram_admin(), msg)
+                break
 
+    def _iter(self):
+        self.DataManager._update(self.Client)
+        self.Stratagy.stratagy(self.Client, 
+                               self.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
+                                                                            positions=True,
+                                                                            orders=True,
+                                                                            order_book=True)))
+    def _load_token(self):
+        with open('./config.json', 'r') as f:
+            return json.load(f)['token']
+    def _load_telegram_token(self):
+        with open('./config.json', 'r') as f:
+            return json.load(f)['telegram_token']
+    def _load_telegram_admin(self):
+        with open('./config.json', 'r') as f:
+            return json.load(f)['telegram_admin']
 
-# dm = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
-# pprint(dm.update(client).__dict__)
-
-# pprint(dm.get_data(DataStorageRequest(figi='BBG333333333',
-#                                      positions=True,
-#                                      orders=True,
-#                                      order_book=True)))
-
+bot = Bot()
+bot.run()
