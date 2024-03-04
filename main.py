@@ -5,16 +5,13 @@ from tinkoff.invest import PortfolioPosition
 from tinkoff.invest import SecurityTradingStatus
 from tinkoff.invest.sandbox.client import SandboxClient
 
-import numpy as np
-import pandas as pd
-
 import os
 import json
-import asyncio
 from types import NoneType
-from time import sleep
 
 from pprint import pprint
+
+from interface import *
 
 def _obj_to_scalar(value: MoneyValue | Quotation):
     return value.units + value.nano / 1_000_000_000
@@ -59,14 +56,14 @@ class Stratagy():
     def __init__(self, _buy_cond, _sell_cond):
         self.buy_condition = _buy_cond
         self.sell_condition = _sell_cond
-    def stratagy(self, client : Client, orders : Orders):
+    def stratagy(self, client : Client, orders : Orders, data : DataStorageResponse):
         self.buy_condition(client, orders)
         self.sell_condition(client, orders)
 
 class TMOS_Stratagy(Stratagy):
     def __init__(self):
         super().__init__(self.buy_condition, self.sell_condition)
-    def buy_condition(self, client : Client, orders: Orders):
+    def buy_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
         # get data
         orders = orders.update_orders(client)
         position = self._get_position(client)
@@ -87,7 +84,7 @@ class TMOS_Stratagy(Stratagy):
                                                       direction = OrderDirection.ORDER_DIRECTION_BUY,
                                                       order_type = OrderType.ORDER_TYPE_LIMIT,
                                                       price = _scalar_to_quotation(price),
-                                                      quantity = 10)
+                                                      quantity = 100)
             elif len(order_prices) <= 5:
                 for i in range(10 - len(order_prices)):
                     price = order_prices[0] - _obj_to_scalar(instrument.min_price_increment) * (i + 1)
@@ -96,9 +93,9 @@ class TMOS_Stratagy(Stratagy):
                                     direction = OrderDirection.ORDER_DIRECTION_BUY,
                                     order_type = OrderType.ORDER_TYPE_LIMIT,
                                     price = _scalar_to_quotation(price),
-                                    quantity = 10)
+                                    quantity = 100)
                     
-    def sell_condition(self, client : Client, orders: Orders):
+    def sell_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
         orders = orders.update_orders(client)
         
         for order in orders[OrderDirection.ORDER_DIRECTION_SELL]:
@@ -139,36 +136,6 @@ class TMOS_Stratagy(Stratagy):
 #         if client.services.market_data.get_trading_status(figi='BBG333333333').trading_status == SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
 #             str_.stratagy(client, orders)
 #         sleep(2)
-
-class Response():
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            self.__dict__[key] = value
-
-class DataStorageResponse(Response):
-    def __init__(self, 
-                 positions : dict,
-                 orders : list,
-                 order_book : dict):
-        super().__init__(positions=positions, 
-                         orders=orders, 
-                         order_book=order_book)
-
-class Request():
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            self.__dict__[key] = value
-
-class DataStorageRequest(Request):
-    def __init__(self, 
-                 figi : str,
-                 positions : bool = False,
-                 orders : bool = False,
-                 order_book : bool = False):
-        super().__init__(figi=figi, 
-                         positions=positions,
-                         orders=orders, 
-                         order_book=order_book)
 
 class DataManager():
     def __init__(self,
@@ -215,6 +182,8 @@ class DataManager():
                     continue
                 positions = pos
                 break
+            else:
+                positions = None
         if request.orders:
             orders = {OrderDirection.ORDER_DIRECTION_BUY : [],
                       OrderDirection.ORDER_DIRECTION_SELL : []}
@@ -259,4 +228,5 @@ pprint(dm.update(client).__dict__)
 pprint(dm.get_data(DataStorageRequest(figi='BBG333333333',
                                      positions=True,
                                      orders=True,
-                                     order_book=True)).orders)
+                                     order_book=True)))
+
