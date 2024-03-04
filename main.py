@@ -1,8 +1,8 @@
 from tinkoff.invest import Client
 from tinkoff.invest import Quotation, MoneyValue
-from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType
+from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType
 from tinkoff.invest import PortfolioPosition
-from tinkoff.invest import SecurityTradingStatus
+from tinkoff.invest import ReplaceOrderRequest
 from tinkoff.invest.sandbox.client import SandboxClient
 
 import os
@@ -12,12 +12,8 @@ from types import NoneType
 from pprint import pprint
 
 from interface import *
+from utils import *
 
-def _obj_to_scalar(value: MoneyValue | Quotation):
-    return value.units + value.nano / 1_000_000_000
-
-def _scalar_to_quotation(value : float):
-    return Quotation(units = int(value), nano = int((value - int(value)) * 1_000_000_000))
 
 class Client(object):
     def __init__(self, token):
@@ -56,67 +52,84 @@ class Stratagy():
     def __init__(self, _buy_cond, _sell_cond):
         self.buy_condition = _buy_cond
         self.sell_condition = _sell_cond
-    def stratagy(self, client : Client, orders : Orders, data : DataStorageResponse):
-        self.buy_condition(client, orders)
-        self.sell_condition(client, orders)
+    def stratagy(self, client : Client, data : DataStorageResponse):
+        self.buy_condition(client, data)
+        self.sell_condition(client, data)
 
 class TMOS_Stratagy(Stratagy):
     def __init__(self):
         super().__init__(self.buy_condition, self.sell_condition)
-    def buy_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
+
+    def buy_condition(self, client : Client, data : DataStorageResponse):
         # get data
-        orders = orders.update_orders(client)
-        position = self._get_position(client)
+        orders = data.orders
+        position = position.positions
+        order_book = data.order_book
+
         instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
                                                         id = position.figi).instrument
-        order_book = client.services.market_data.get_order_book(figi = position.figi,
-                                                                depth = 50)
-        if position.quantity == Quotation(0,0):
-            order_prices = []
-            for order in orders[OrderDirection.ORDER_DIRECTION_BUY]:
-                order_prices.append = _obj_to_scalar(client.services.orders.get_order_state(account_id = client.account, order_id = order).average_position_price)
-            order_prices = sorted(order_prices)
-            if len(order_prices) == 0:
-                for i in range(10):
-                    price = _obj_to_scalar(order_book.bids[0].price) - _obj_to_scalar(instrument.min_price_increment) * i
-                    client.services.orders.post_order(account_id = client.account, 
-                                                      figi = 'BBG333333333',
-                                                      direction = OrderDirection.ORDER_DIRECTION_BUY,
-                                                      order_type = OrderType.ORDER_TYPE_LIMIT,
-                                                      price = _scalar_to_quotation(price),
-                                                      quantity = 100)
-            elif len(order_prices) <= 5:
-                for i in range(10 - len(order_prices)):
-                    price = order_prices[0] - _obj_to_scalar(instrument.min_price_increment) * (i + 1)
-                    client.services.orders.post_order(account_id = client.account, 
-                                    figi = 'BBG333333333',
-                                    direction = OrderDirection.ORDER_DIRECTION_BUY,
-                                    order_type = OrderType.ORDER_TYPE_LIMIT,
-                                    price = _scalar_to_quotation(price),
-                                    quantity = 100)
-                    
-    def sell_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
-        orders = orders.update_orders(client)
+        increment = obj_to_scalar(instrument.min_price_increment)
         
-        for order in orders[OrderDirection.ORDER_DIRECTION_SELL]:
-            try:
-                client.services.orders.cancel_order(account_id = client.account,
-                                                    order_id = order)
-            except: pass
-        position = self._get_position(client)
-        instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
-                                                            id = position.figi).instrument
-        if _obj_to_scalar(position.quantity) == 0:
-            return
+        # buy condition and orders
+        orders_prices = sorted([obj_to_scalar(order.average_position_price) for order in orders[OrderDirection.ORDER_DIRECTION_BUY]])
 
-        price = _obj_to_scalar(position.average_position_price) + _obj_to_scalar(instrument.min_price_increment)
-        client.services.orders.post_order(account_id = client.account, 
-                        figi = 'BBG333333333',
-                        direction = OrderDirection.ORDER_DIRECTION_SELL,
-                        order_type = OrderType.ORDER_TYPE_LIMIT,
-                        price = _scalar_to_quotation(price),
-                        quantity = int(_obj_to_scalar(position.quantity)))
+        n_order2place = 10 - len(orders_prices)
+
+        if position.quantity == Quotation(units=0, nano=0):
+            # start orders price
+            if n_order2place == 10:
+                order_price = obj_to_scalar(order_book.bids[0].price)
+            else:
+                order_price = orders_prices[0] - increment
+
+        # BLYAT CHTOBI YA ESHE RAS ETI FORMULI VIVODIL
+        else:
+            if scalar_to_quotation(position.quantity) % 2 == 0: 
+                order_price = obj_to_scalar(position.average_position_price) - increment / 2 - increment * scalar_to_quotation(position.quantity) // 200
+            else:
+                order_price = obj_to_scalar(position.average_position_price) - increment * scalar_to_quotation(position.quantity) // 200
+            order_price -= order_price % increment 
+
+        # place orders
+        for _ in range(n_order2place):
+            client.services.orders.post_order(account_id = client.account, 
+                direction = OrderDirection.ORDER_DIRECTION_BUY,
+                order_type = OrderType.ORDER_TYPE_LIMIT,
+                price = scalar_to_quotation(order_price),
+                figi = 'BBG333333333',
+                quantity = 100)
+            order_price -= increment
+
+    def sell_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
+        # get data
+        orders = data.orders
+        position : PortfolioPosition = position.positions 
+        order_book = data.order_book
+
+        instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
+                                                        id = position.figi).instrument
+        increment = obj_to_scalar(instrument.min_price_increment)
         
+
+        price = obj_to_scalar(position.average_position_price) + increment
+        if len(orders[OrderDirection.ORDER_DIRECTION_SELL]) == 0:
+            client.services.orders.post_order(account_id = client.account, 
+                            figi = 'BBG333333333',
+                            direction = OrderDirection.ORDER_DIRECTION_SELL,
+                            order_type = OrderType.ORDER_TYPE_LIMIT,
+                            price = scalar_to_quotation(price),
+                            quantity = int(obj_to_scalar(position.quantity)))
+        else:
+            request = ReplaceOrderRequest()
+            request.account_id = client.account
+            # request.idempotency_key = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_request_id
+            request.order_id = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_id
+            request.quantity = int(obj_to_scalar(position.quantity))
+            request.price = scalar_to_quotation(price)
+            request.price_type = PriceType.PRICE_TYPE_CURRENCY
+
+            client.services.orders.replace_order(request)
+
     def _get_position(self, client : Client):
         positions = client.services.operations.get_portfolio(account_id = client.account).positions
         for position in positions:
@@ -125,18 +138,6 @@ class TMOS_Stratagy(Stratagy):
         return PortfolioPosition(figi = 'BBG333333333',
                                  quantity = Quotation(0,0))
     
-# if __name__ == "__main__": 
-#     # get token
-
-
-
-#     orders = Orders(client)
-#     str_ = TMOS_Stratagy()
-#     while True:
-#         if client.services.market_data.get_trading_status(figi='BBG333333333').trading_status == SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
-#             str_.stratagy(client, orders)
-#         sleep(2)
-
 class DataManager():
     def __init__(self,
                  positions_state : bool = False,
@@ -176,6 +177,7 @@ class DataManager():
                                                                     depth = 50)
     
     def get_data(self, request : DataStorageRequest):
+        # get position
         if request.positions:
             for pos in self.positions:
                 if pos.figi != request.figi:
@@ -183,7 +185,9 @@ class DataManager():
                 positions = pos
                 break
             else:
-                positions = None
+                positions = PortfolioPosition(figi=request.figi,
+                                              quantity=Quotation(units=0, nano=0))
+        # get orders
         if request.orders:
             orders = {OrderDirection.ORDER_DIRECTION_BUY : [],
                       OrderDirection.ORDER_DIRECTION_SELL : []}
@@ -193,6 +197,7 @@ class DataManager():
             for order in self.orders[OrderDirection.ORDER_DIRECTION_SELL]:
                 if order.figi == request.figi:
                     orders[OrderDirection.ORDER_DIRECTION_SELL].append(order)
+        # get order book
         if request.order_book:
             order_book = self.order_book[request.figi]
         return DataStorageResponse(positions=positions, orders=orders, order_book=order_book)
@@ -215,18 +220,18 @@ class DataManager():
         if or_b in self.order_book.keys():
             del self.order_book[or_b] 
 
-with open('./config.json', 'r') as f:
-    data  = json.load(f)
+# with open('./config.json', 'r') as f:
+#     data  = json.load(f)
 
-os.environ['token'] = data['token']
-client = Client(os.environ['token'])
+# os.environ['token'] = data['token']
+# client = Client(os.environ['token'])
 
 
-dm = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
-pprint(dm.update(client).__dict__)
+# dm = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
+# pprint(dm.update(client).__dict__)
 
-pprint(dm.get_data(DataStorageRequest(figi='BBG333333333',
-                                     positions=True,
-                                     orders=True,
-                                     order_book=True)))
+# pprint(dm.get_data(DataStorageRequest(figi='BBG333333333',
+#                                      positions=True,
+#                                      orders=True,
+#                                      order_book=True)))
 
