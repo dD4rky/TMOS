@@ -30,25 +30,6 @@ class Client(object):
             return self.services.sandbox.open_sandbox_account().account_id
         if len(accounts) == 1:
             return accounts[0].id
-
-class Orders():
-    orders = {OrderDirection.ORDER_DIRECTION_BUY : [],
-              OrderDirection.ORDER_DIRECTION_SELL : []}
-    
-    def __init__(self, client : Client):
-        self.update_orders(client)
-
-    def update_orders(self, client : Client):
-        self.orders[OrderDirection.ORDER_DIRECTION_BUY] = []
-        self.orders[OrderDirection.ORDER_DIRECTION_SELL] = []
-
-        orders = client.services.orders.get_orders(account_id = client.account).orders
-        for order in orders:
-            if order.direction == OrderDirection.ORDER_DIRECTION_BUY:
-                self.orders[OrderDirection.ORDER_DIRECTION_BUY].append(order.order_id)
-            if order.direction == OrderDirection.ORDER_DIRECTION_SELL:
-                self.orders[OrderDirection.ORDER_DIRECTION_SELL].append(order.order_id)
-        return self.orders
     
 class Stratagy():
     def __init__(self, _buy_cond, _sell_cond):
@@ -232,7 +213,7 @@ class Bot():
     def run(self):
         bot = telebot.TeleBot(token=self._load_telegram_token())
         while True:
-            sleep(2)
+            sleep(5)
             if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
                 continue
             try:
