@@ -1,3 +1,4 @@
+from tinkoff.invest import exceptions
 from tinkoff.invest import Client
 from tinkoff.invest import Quotation
 from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType, SecurityTradingStatus
@@ -30,7 +31,9 @@ class Client(object):
             return self.services.sandbox.open_sandbox_account().account_id
         if len(accounts) == 1:
             return accounts[0].id
-    
+    def update_services(self) -> None:
+        self.services = SandboxClient(self.token).__enter__()
+
 class Stratagy():
     def __init__(self, _buy_cond, _sell_cond):
         self.buy_condition = _buy_cond
@@ -59,6 +62,10 @@ class TMOS_Stratagy(Stratagy):
         n_order2place = 10 - len(orders_prices)
 
         if position.quantity == Quotation(units=0, nano=0):
+            if len(orders_prices) != 0:
+                if orders_prices[-1] + increment * 3 < obj_to_scalar(order_book.bids[0].price):
+                    for order in orders[OrderDirection.ORDER_DIRECTION_BUY]:
+                        client.services.orders.cancel_order(account_id=client.account, order_id=order.order_id)
             # start orders price
             if n_order2place == 10:
                 order_price = obj_to_scalar(order_book.bids[0].price)
@@ -112,14 +119,6 @@ class TMOS_Stratagy(Stratagy):
             request.price_type = PriceType.PRICE_TYPE_CURRENCY
 
             client.services.orders.replace_order(request)
-
-    def _get_position(self, client : Client):
-        positions = client.services.operations.get_portfolio(account_id = client.account).positions
-        for position in positions:
-            if position.figi == 'BBG333333333':
-                return position
-        return PortfolioPosition(figi = 'BBG333333333',
-                                 quantity = Quotation(0,0))
     
 class DataManager():
     def __init__(self,
@@ -210,14 +209,18 @@ class Bot():
         self.Stratagy = TMOS_Stratagy()
         self.DataManager = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
 
+        pprint(self.Client.services.operations.get_portfolio(account_id=self.Client.account).positions)
     def run(self):
         bot = telebot.TeleBot(token=self._load_telegram_token())
         while True:
-            sleep(5)
-            if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
-                continue
+            sleep(2)
             try:
+                if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
+                    continue
                 self._iter()
+            except exceptions.RequestError:
+                self.Client.update_services()
+                continue
             except Exception as e:
                 msg = traceback.format_exc()
                 print(msg)
