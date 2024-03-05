@@ -67,10 +67,10 @@ class TMOS_Stratagy(Stratagy):
 
         # BLYAT CHTOBI YA ESHE RAS ETI FORMULI VIVODIL
         else:
-            if scalar_to_quotation(position.quantity) % 2 == 0: 
-                order_price = obj_to_scalar(position.average_position_price) - increment / 2 - increment * scalar_to_quotation(position.quantity) // 200
+            if obj_to_scalar(position.quantity) % 2 == 0: 
+                order_price = obj_to_scalar(position.average_position_price) - increment / 2 - increment * obj_to_scalar(position.quantity) // 200
             else:
-                order_price = obj_to_scalar(position.average_position_price) - increment * scalar_to_quotation(position.quantity) // 200
+                order_price = obj_to_scalar(position.average_position_price) - increment * obj_to_scalar(position.quantity) // 200
             order_price -= order_price % increment 
 
         # place orders
@@ -83,17 +83,17 @@ class TMOS_Stratagy(Stratagy):
                 quantity = 100)
             order_price -= increment
 
-    def sell_condition(self, client : Client, orders: Orders, data : DataStorageResponse):
+    def sell_condition(self, client : Client, data : DataStorageResponse):
         # get data
         orders = data.orders
-        position : PortfolioPosition = position.positions 
-        order_book = data.order_book
+        position = data.positions 
 
         instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
                                                         id = position.figi).instrument
         increment = obj_to_scalar(instrument.min_price_increment)
         
-
+        if obj_to_scalar(position.quantity) == 0:
+            return
         price = obj_to_scalar(position.average_position_price) + increment
         if len(orders[OrderDirection.ORDER_DIRECTION_SELL]) == 0:
             client.services.orders.post_order(account_id = client.account, 
