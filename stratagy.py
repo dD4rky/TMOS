@@ -1,6 +1,6 @@
 from tinkoff.invest import Client
 from tinkoff.invest import Quotation
-from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType, SecurityTradingStatus
+from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType
 from tinkoff.invest import ReplaceOrderRequest
 
 from dataclasses import dataclass
