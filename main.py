@@ -1,16 +1,16 @@
 from tinkoff.invest import exceptions
 from tinkoff.invest import Client
 from tinkoff.invest import Quotation
-from tinkoff.invest import OrderDirection, InstrumentIdType, OrderType, PriceType, SecurityTradingStatus
+from tinkoff.invest import OrderDirection, SecurityTradingStatus
 from tinkoff.invest import PortfolioPosition
-from tinkoff.invest import ReplaceOrderRequest
 from tinkoff.invest.sandbox.client import SandboxClient
+
+from stratagy import TMOS_Stratagy
 
 import json
 import traceback
 from time import sleep
 from types import NoneType
-
 
 from pprint import pprint
 
@@ -29,105 +29,14 @@ class Client(object):
     def _accounts(self):
         accounts = self.services.users.get_accounts().accounts
         if accounts == []:
-            return self.services.sandbox.open_sandbox_account().account_id
+            account_id = self.services.sandbox.open_sandbox_account().account_id
+            self.services.sandbox.sandbox_pay_in(account_id=account_id, amount=MoneyValue(currency='RUB', units=10000, nano=0))
+            return 
         if len(accounts) == 1:
             return accounts[0].id
     def update_services(self) -> None:
         self.services = SandboxClient(self.token).__enter__()
 
-class Stratagy():
-    def __init__(self, _buy_cond, _sell_cond):
-        self.buy_condition = _buy_cond
-        self.sell_condition = _sell_cond
-    def stratagy(self, client : Client, data : DataStorageResponse):
-        self.buy_condition(client, data)
-        self.sell_condition(client, data)
-
-class TMOS_Stratagy(Stratagy):
-    def __init__(self):
-        super().__init__(self.buy_condition, self.sell_condition)
-
-    def buy_condition(self, client : Client, data : DataStorageResponse):
-        # get data
-        orders = data.orders
-        position = data.positions
-        order_book = data.order_book
-
-        instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
-                                                        id = position.figi).instrument
-        increment = obj_to_scalar(instrument.min_price_increment)
-        
-        # buy condition and orders
-        orders_prices = sorted([obj_to_scalar(order.average_position_price) for order in orders[OrderDirection.ORDER_DIRECTION_BUY]])
-        if position.quantity == Quotation(units=0, nano=0) and orders_prices != []:
-            if orders_prices[-1] < obj_to_scalar(order_book.bids[0].price):
-                for order in orders[OrderDirection.ORDER_DIRECTION_BUY]:
-                    client.services.orders.cancel_order(account_id=client.account, order_id=order.order_id)
-                orders_prices = []
-
-        n_order2place = 10 - len(orders_prices)
-
-        # start orders price
-        if n_order2place == 10:
-            order_price = obj_to_scalar(order_book.bids[0].price)
-        else:
-            order_price = orders_prices[0] - increment
-
-        if obj_to_scalar(position.quantity) % 2 == 0 and obj_to_scalar(position.quantity) != 0 and orders_prices != []: 
-            order_price = obj_to_scalar(position.average_position_price_fifo) - increment / 2 - increment * (obj_to_scalar(position.quantity) / 200)
-        elif obj_to_scalar(position.quantity) % 1 == 0 and obj_to_scalar(position.quantity) != 0 and orders_prices != []:
-            order_price = obj_to_scalar(position.average_position_price_fifo) - increment * (obj_to_scalar(position.quantity) / 200)
-
-        order_price -= order_price % increment 
-        
-        # place orders
-        for _ in range(n_order2place):
-            client.services.orders.post_order(account_id = client.account, 
-                direction = OrderDirection.ORDER_DIRECTION_BUY,
-                order_type = OrderType.ORDER_TYPE_LIMIT,
-                price = scalar_to_quotation(order_price),
-                figi = 'BBG333333333',
-                quantity = 100)
-            order_price -= increment
-
-    def sell_condition(self, client : Client, data : DataStorageResponse):
-        # get data
-        orders = data.orders
-        position = data.positions 
-
-        instrument = client.services.instruments.etf_by(id_type = InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
-                                                        id = position.figi).instrument
-        increment = obj_to_scalar(instrument.min_price_increment)
-        
-        if obj_to_scalar(position.quantity) == 0:
-            return
-        
-        price = (obj_to_scalar(position.average_position_price_fifo) // increment + 1) * increment
-        print(price)
-        
-        if len(orders[OrderDirection.ORDER_DIRECTION_SELL]) == 0:
-            pprint(client.services.orders.post_order(account_id = client.account, 
-                            figi = 'BBG333333333',
-                            direction = OrderDirection.ORDER_DIRECTION_SELL,
-                            order_type = OrderType.ORDER_TYPE_LIMIT,
-                            price = scalar_to_quotation(price),
-                            quantity = int(obj_to_scalar(position.quantity))))
-        else:
-            sell_order = orders[OrderDirection.ORDER_DIRECTION_SELL][0]
-            if (obj_to_scalar(sell_order.average_position_price) // increment + 1) * increment == price or position.quantity == sell_order.lots_requested - sell_order.lots_executed:
-                return
-            print(f'Position\n\rprice: {position.average_position_price_fifo}\n\rquantity: {obj_to_scalar(position.quantity)}\n\n\rOrder\n\rprice: {price}\n\rquantity: {sell_order.lots_requested - sell_order.lots_executed}\n\rposition')
-            request = ReplaceOrderRequest()
-            
-            request.account_id = client.account
-            request.idempotency_key = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_id
-            request.order_id = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_id
-            request.quantity = int(obj_to_scalar(position.quantity))
-            request.price = scalar_to_quotation(price)
-            request.price_type = PriceType.PRICE_TYPE_CURRENCY
-
-            pprint(client.services.orders.replace_order(request))
-    
 class DataManager():
     def __init__(self,
                  positions_state : bool = False,
@@ -229,7 +138,13 @@ class Bot():
                 sleep(2)
             except exceptions.RequestError:
                 self.Client.update_services()
-                continue
+                msg = traceback.format_exc()
+                if 'resource exhausted' in msg:
+                    continue
+                print(msg)
+                bot.send_message(self._load_telegram_admin(), msg)
+                break
+
             except Exception as e:
                 msg = traceback.format_exc()
                 print(msg)
@@ -253,8 +168,11 @@ class Bot():
         with open('./config.json', 'r') as f:
             return json.load(f)['telegram_admin']
 
-bot = Bot()
-bot.run()
+if __name__ == '__main__':
+    bot = Bot()
+    bot.run()
+
+# bot.Client.services.sandbox.close_sandbox_account(account_id=bot.Client.account)
 
 # bot.DataManager._update(bot.Client)
 # data = bot.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
@@ -265,7 +183,7 @@ bot.run()
 #     bot.Client.services.orders.cancel_order(account_id=bot.Client.account,
 #                                             order_id=order.order_id)
 # bot.Client.services.orders.post_order(figi='BBG333333333', 
-#                                       quantity=100, 
+#                                       quantity=25100, 
 #                                       order_type=OrderType.ORDER_TYPE_MARKET,
-#                                       direction=OrderDirection.ORDER_DIRECTION_SELL,
+#                                       direction=OrderDirection.ORDER_DIRECTION_BUY,
 #                                       account_id=bot.Client.account)
