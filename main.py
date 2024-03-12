@@ -11,6 +11,7 @@ import traceback
 from time import sleep
 from types import NoneType
 
+
 from pprint import pprint
 
 from interface import *
@@ -58,28 +59,27 @@ class TMOS_Stratagy(Stratagy):
         
         # buy condition and orders
         orders_prices = sorted([obj_to_scalar(order.average_position_price) for order in orders[OrderDirection.ORDER_DIRECTION_BUY]])
+        if position.quantity == Quotation(units=0, nano=0) and orders_prices != []:
+            if orders_prices[-1] < obj_to_scalar(order_book.bids[0].price):
+                for order in orders[OrderDirection.ORDER_DIRECTION_BUY]:
+                    client.services.orders.cancel_order(account_id=client.account, order_id=order.order_id)
+                orders_prices = []
 
         n_order2place = 10 - len(orders_prices)
 
-        if position.quantity == Quotation(units=0, nano=0):
-            if len(orders_prices) != 0:
-                if orders_prices[-1] + increment * 3 < obj_to_scalar(order_book.bids[0].price):
-                    for order in orders[OrderDirection.ORDER_DIRECTION_BUY]:
-                        client.services.orders.cancel_order(account_id=client.account, order_id=order.order_id)
-            # start orders price
-            if n_order2place == 10:
-                order_price = obj_to_scalar(order_book.bids[0].price)
-            else:
-                order_price = orders_prices[0] - increment
-
-        # BLYAT CHTOBI YA ESHE RAS ETI FORMULI VIVODIL
+        # start orders price
+        if n_order2place == 10:
+            order_price = obj_to_scalar(order_book.bids[0].price)
         else:
-            if obj_to_scalar(position.quantity) % 2 == 0: 
-                order_price = obj_to_scalar(position.average_position_price) - increment / 2 - increment * obj_to_scalar(position.quantity) // 200
-            else:
-                order_price = obj_to_scalar(position.average_position_price) - increment * obj_to_scalar(position.quantity) // 200
-            order_price -= order_price % increment 
+            order_price = orders_prices[0] - increment
 
+        if obj_to_scalar(position.quantity) % 2 == 0 and obj_to_scalar(position.quantity) != 0 and orders_prices != []: 
+            order_price = obj_to_scalar(position.average_position_price_fifo) - increment / 2 - increment * (obj_to_scalar(position.quantity) / 200)
+        elif obj_to_scalar(position.quantity) % 1 == 0 and obj_to_scalar(position.quantity) != 0 and orders_prices != []:
+            order_price = obj_to_scalar(position.average_position_price_fifo) - increment * (obj_to_scalar(position.quantity) / 200)
+
+        order_price -= order_price % increment 
+        
         # place orders
         for _ in range(n_order2place):
             client.services.orders.post_order(account_id = client.account, 
@@ -101,24 +101,32 @@ class TMOS_Stratagy(Stratagy):
         
         if obj_to_scalar(position.quantity) == 0:
             return
-        price = obj_to_scalar(position.average_position_price) + increment
+        
+        price = (obj_to_scalar(position.average_position_price_fifo) // increment + 1) * increment
+        print(price)
+        
         if len(orders[OrderDirection.ORDER_DIRECTION_SELL]) == 0:
-            client.services.orders.post_order(account_id = client.account, 
+            pprint(client.services.orders.post_order(account_id = client.account, 
                             figi = 'BBG333333333',
                             direction = OrderDirection.ORDER_DIRECTION_SELL,
                             order_type = OrderType.ORDER_TYPE_LIMIT,
                             price = scalar_to_quotation(price),
-                            quantity = int(obj_to_scalar(position.quantity)))
+                            quantity = int(obj_to_scalar(position.quantity))))
         else:
+            sell_order = orders[OrderDirection.ORDER_DIRECTION_SELL][0]
+            if (obj_to_scalar(sell_order.average_position_price) // increment + 1) * increment == price or position.quantity == sell_order.lots_requested - sell_order.lots_executed:
+                return
+            print(f'Position\n\rprice: {position.average_position_price_fifo}\n\rquantity: {obj_to_scalar(position.quantity)}\n\n\rOrder\n\rprice: {price}\n\rquantity: {sell_order.lots_requested - sell_order.lots_executed}\n\rposition')
             request = ReplaceOrderRequest()
+            
             request.account_id = client.account
-            # request.idempotency_key = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_request_id
+            request.idempotency_key = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_id
             request.order_id = orders[OrderDirection.ORDER_DIRECTION_SELL][0].order_id
             request.quantity = int(obj_to_scalar(position.quantity))
             request.price = scalar_to_quotation(price)
             request.price_type = PriceType.PRICE_TYPE_CURRENCY
 
-            client.services.orders.replace_order(request)
+            pprint(client.services.orders.replace_order(request))
     
 class DataManager():
     def __init__(self,
@@ -218,6 +226,7 @@ class Bot():
                 if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
                     continue
                 self._iter()
+                sleep(2)
             except exceptions.RequestError:
                 self.Client.update_services()
                 continue
@@ -246,3 +255,17 @@ class Bot():
 
 bot = Bot()
 bot.run()
+
+# bot.DataManager._update(bot.Client)
+# data = bot.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
+#                                                                     positions=True,
+#                                                                     orders=True,
+#                                                                     order_book=True))
+# for order in data.orders[2]:
+#     bot.Client.services.orders.cancel_order(account_id=bot.Client.account,
+#                                             order_id=order.order_id)
+# bot.Client.services.orders.post_order(figi='BBG333333333', 
+#                                       quantity=100, 
+#                                       order_type=OrderType.ORDER_TYPE_MARKET,
+#                                       direction=OrderDirection.ORDER_DIRECTION_SELL,
+#                                       account_id=bot.Client.account)
