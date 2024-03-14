@@ -1,5 +1,6 @@
 from tinkoff.invest import MoneyValue, Quotation
 import math
+
 def obj_to_scalar(value: MoneyValue | Quotation):
     return value.units + value.nano / 1_000_000_000
 

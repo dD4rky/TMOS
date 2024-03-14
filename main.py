@@ -2,7 +2,7 @@ from tinkoff.invest import exceptions
 from tinkoff.invest import Client
 from tinkoff.invest import Quotation
 from tinkoff.invest import OrderDirection, SecurityTradingStatus
-from tinkoff.invest import PortfolioPosition
+from tinkoff.invest import PortfolioPosition, OrderType
 from tinkoff.invest.sandbox.client import SandboxClient
 
 from stratagy import TMOS_Stratagy
@@ -11,6 +11,7 @@ import json
 import traceback
 from time import sleep
 from types import NoneType
+import asyncio
 
 from pprint import pprint
 
@@ -18,6 +19,8 @@ from interface import *
 from utils import *
 
 import telebot
+
+
 
 class Client(object):
     def __init__(self, token):
@@ -57,7 +60,7 @@ class DataManager():
         self._update(client)
         return DataStorageResponse(self.positions, self.orders, self.order_book)
     
-    def _update(self, client : Client) -> None: # protected
+    async def _update(self, client : Client) -> None: # protected
         if self.orders_state:
             self.orders = {OrderDirection.ORDER_DIRECTION_BUY : [],
                            OrderDirection.ORDER_DIRECTION_SELL : []}
@@ -75,7 +78,7 @@ class DataManager():
             self.order_book[or_b] = client.services.market_data.get_order_book(figi = or_b,
                                                                     depth = 50)
     
-    def get_data(self, request : DataStorageRequest):
+    async def get_data(self, request : DataStorageRequest):
         # get position
         if request.positions:
             for pos in self.positions:
@@ -127,19 +130,26 @@ class Bot():
         self.DataManager = DataManager(positions_state = True, orders_state = True, order_book = ['BBG333333333'])
 
         pprint(self.Client.services.operations.get_portfolio(account_id=self.Client.account).positions)
-    def run(self):
+    async def run(self):
         bot = telebot.TeleBot(token=self._load_telegram_token())
         while True:
             sleep(2)
             try:
                 if self.Client.services.market_data.get_trading_status(figi='BBG333333333').trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NORMAL_TRADING:
                     continue
-                self._iter()
+                _iter = self._iter()
+                await _iter
                 sleep(2)
             except exceptions.RequestError:
                 self.Client.update_services()
                 msg = traceback.format_exc()
                 if 'resource exhausted' in msg:
+                    continue
+                elif 'order not found' in msg:
+                    continue
+                elif 'Stream removed' in msg:
+                    continue
+                elif 'internal error' in msg:
                     continue
                 print(msg)
                 bot.send_message(self._load_telegram_admin(), msg)
@@ -151,13 +161,18 @@ class Bot():
                 bot.send_message(self._load_telegram_admin(), msg)
                 break
 
-    def _iter(self):
-        self.DataManager._update(self.Client)
-        self.Stratagy.stratagy(self.Client, 
-                               self.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
-                                                                            positions=True,
-                                                                            orders=True,
-                                                                            order_book=True)))
+    async def _iter(self):
+        update_method = self.DataManager._update(self.Client)
+        data_manager = self.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
+                                                    positions=True,
+                                                    orders=True,
+                                                    order_book=True))
+        # self.Stratagy.stratagy(self.Client, 
+        #                        self.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
+        #                                                                     positions=True,
+        #                                                                     orders=True,
+        #                                                                     order_book=True)))
+        await self.Stratagy.stratagy(self.Client, update_method, data_manager)
     def _load_token(self):
         with open('./config.json', 'r') as f:
             return json.load(f)['token']
@@ -170,9 +185,11 @@ class Bot():
 
 if __name__ == '__main__':
     bot = Bot()
-    bot.run()
-
+    ev_loop = asyncio.get_event_loop()
+    ev_loop.run_until_complete(bot.run())
+    
 # bot.Client.services.sandbox.close_sandbox_account(account_id=bot.Client.account)
+
 
 # bot.DataManager._update(bot.Client)
 # data = bot.DataManager.get_data(DataStorageRequest(figi='BBG333333333', 
@@ -183,7 +200,7 @@ if __name__ == '__main__':
 #     bot.Client.services.orders.cancel_order(account_id=bot.Client.account,
 #                                             order_id=order.order_id)
 # bot.Client.services.orders.post_order(figi='BBG333333333', 
-#                                       quantity=25100, 
+#                                       quantity=200, 
 #                                       order_type=OrderType.ORDER_TYPE_MARKET,
 #                                       direction=OrderDirection.ORDER_DIRECTION_BUY,
 #                                       account_id=bot.Client.account)
